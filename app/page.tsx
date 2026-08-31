@@ -1,7 +1,8 @@
 'use client';
 
 import type { GeoJSONSource, Map as MapLibreMap, Marker as MapLibreMarker, StyleSpecification } from 'maplibre-gl';
-import { FormEvent, PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 type Coordinates = [number, number];
 type PetType = 'Dogs' | 'Cats' | 'Birds' | 'Rabbits' | 'Reptiles' | 'Other';
@@ -71,12 +72,6 @@ const distanceMeters = (from: Coordinates, to: Coordinates) => {
 };
 
 const directionDegrees: Record<string, number> = { N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315 };
-const directionFromDrag = (start: { x: number; y: number }, end: { x: number; y: number }) => {
-  const distance = Math.hypot(end.x - start.x, end.y - start.y);
-  if (distance < 24) return '?';
-  const bearing = (Math.atan2(end.x - start.x, start.y - end.y) * 180 / Math.PI + 360) % 360;
-  return ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(bearing / 45) % 8];
-};
 const projectDirection = (coordinates: Coordinates, direction: string, meters = 65): Coordinates => {
   const bearing = directionDegrees[direction];
   if (bearing === undefined) return coordinates;
@@ -140,7 +135,7 @@ export default function Home() {
   const [reportDirection, setReportDirection] = useState('?');
   const [reportNote, setReportNote] = useState('');
   const [directionMode, setDirectionMode] = useState(false);
-  const [directionGesture, setDirectionGesture] = useState<{ start: { x: number; y: number }; current: { x: number; y: number } } | null>(null);
+  const [directionAnchor, setDirectionAnchor] = useState<{ x: number; y: number } | null>(null);
   const [toast, setToast] = useState('');
   const [testMode, setTestMode] = useState(false);
   const [pinMenu, setPinMenu] = useState<{ coordinates: Coordinates; x: number; y: number; distance: number; withinRange: boolean } | null>(null);
@@ -463,9 +458,18 @@ export default function Home() {
   }
 
   function beginDirectionCapture(certainty: Certainty) {
+    if (!reportLocation) { showToast('Location is still being refined'); return; }
+    const map = mapRef.current;
+    const container = map?.getContainer();
+    const projected = map?.project(reportLocation);
+    const width = container?.clientWidth ?? window.innerWidth;
+    const height = container?.clientHeight ?? Math.max(360, window.innerHeight - 56);
+    setDirectionAnchor({
+      x: Math.min(width - 92, Math.max(92, projected?.x ?? width / 2)),
+      y: Math.min(height - 118, Math.max(155, projected?.y ?? height / 2)),
+    });
     setReportCertainty(certainty);
     setReportDirection('?');
-    setDirectionGesture(null);
     setReportOpen(false);
     setDirectionMode(true);
   }
@@ -477,19 +481,12 @@ export default function Home() {
     setReportStep(4);
   }
 
-  function directionPoint(event: ReactPointerEvent<HTMLDivElement>) {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    return { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
-  }
-
-  function finishDirectionCapture(end: { x: number; y: number }) {
-    if (!directionGesture) return;
-    const direction = directionFromDrag(directionGesture.start, end);
+  function finishDirectionCapture(direction: string) {
     const label = direction === '?' ? 'direction unsure' : `heading ${directions.find(([value]) => value === direction)?.[2]}`;
     saveSighting(false, direction);
     setReportDirection(direction);
     setDirectionMode(false);
-    setDirectionGesture(null);
+    setDirectionAnchor(null);
     showToast(`Sighting saved · ${label}`);
   }
 
@@ -528,30 +525,13 @@ export default function Home() {
           {pinMenu && <><button className="pin-menu-dismiss" onClick={() => setPinMenu(null)} aria-label="Close quick menu"/><div className="pin-radial" style={{ left: pinMenu.x, top: pinMenu.y }}><span className="pin-center">●</span>{pinMenu.withinRange && <button className="pin-action sighted" onClick={() => beginPinnedReport(false)}><b>✓</b><small>Sighted</small></button>}{pinMenu.withinRange && <button className="pin-action camera" onClick={() => beginPinnedReport(true)}><b>▣</b><small>Camera</small></button>}<button className="pin-action owner" onClick={() => { setPinMenu(null); selectedPet ? setOwnerOpen(true) : showToast('Choose a missing pet first'); }}><b>♙</b><small>Owner</small></button><button className="pin-action help" onClick={() => { setPinMenu(null); setHelpOpen(true); }}><b>☎</b><small>Help</small></button>{testMode && <button className={`pin-action move ${pinMenu.withinRange ? '' : 'solo'}`} onClick={moveTestHere}><b>⌖</b><small>Move here</small></button>}<em>{pinMenu.withinRange ? `${Math.round(pinMenu.distance)} m away` : 'Move test location here'}</em></div></>}
           <button className="floating-report" onClick={beginReport}>● Report a sighting</button>
           <div className="privacy-strip">Live location is visible only to you · tracking pauses in the background</div>
-          {directionMode && <div
-            className="direction-capture"
-            role="application"
-            aria-label="Slide a finger in the direction the animal was traveling. Tap once if unsure."
-            onPointerDown={(event) => {
-              const point = directionPoint(event);
-              event.currentTarget.setPointerCapture(event.pointerId);
-              setDirectionGesture({ start: point, current: point });
-            }}
-            onPointerMove={(event) => {
-              if (!directionGesture || !event.currentTarget.hasPointerCapture(event.pointerId)) return;
-              setDirectionGesture((current) => current ? { ...current, current: directionPoint(event) } : current);
-            }}
-            onPointerUp={(event) => finishDirectionCapture(directionPoint(event))}
-            onPointerCancel={() => setDirectionGesture(null)}
-          >
-            <div className="direction-capture-head"><p>Final step · {selectedPet?.name}</p><strong>Which way were they going?</strong><small>Touch the map, slide in that direction, and release. Tap once if you’re not sure.</small></div>
-            {!directionGesture && <div className="direction-dial" aria-hidden="true"><b className="dial-n">N</b><b className="dial-ne">NE</b><b className="dial-e">E</b><b className="dial-se">SE</b><b className="dial-s">S</b><b className="dial-sw">SW</b><b className="dial-w">W</b><b className="dial-nw">NW</b><span>Touch<br/>and slide</span></div>}
-            {directionGesture && <>
-              <div className="gesture-origin" style={{ left: directionGesture.start.x, top: directionGesture.start.y }}/>
-              <div className="gesture-arrow" style={{ left: directionGesture.start.x, top: directionGesture.start.y, width: Math.hypot(directionGesture.current.x - directionGesture.start.x, directionGesture.current.y - directionGesture.start.y), transform: `rotate(${Math.atan2(directionGesture.current.y - directionGesture.start.y, directionGesture.current.x - directionGesture.start.x)}rad)` }}><span>➤</span></div>
-              <div className="direction-live-label">{directionFromDrag(directionGesture.start, directionGesture.current) === '?' ? 'Tap = not sure' : directions.find(([value]) => value === directionFromDrag(directionGesture.start, directionGesture.current))?.[2]}</div>
-            </>}
-            <button className="direction-cancel" onPointerDown={(event) => event.stopPropagation()} onClick={() => { setDirectionMode(false); setDirectionGesture(null); setReportOpen(true); setReportStep(2); }}>Cancel</button>
+          {directionMode && directionAnchor && <div className="direction-capture" onClick={(event) => { if (event.target === event.currentTarget) { setDirectionMode(false); setDirectionAnchor(null); setReportOpen(true); setReportStep(2); } }}>
+            <div className="direction-capture-head"><p>Final step · {selectedPet?.name}</p><strong>Which way were they going?</strong><small>Tap one bubble. The sighting saves immediately.</small></div>
+            <div className="direction-bubbles" style={{ left: directionAnchor.x, top: directionAnchor.y }} role="group" aria-label="Choose the animal's direction">
+              {directions.slice(0, 8).map(([value, arrow, label], index) => <button key={value} className={`direction-bubble direction-${value.toLowerCase()}`} style={{ '--bubble-angle': `${index * 45 - 90}deg` } as CSSProperties} onClick={() => finishDirectionCapture(value)} aria-label={label}><span>{arrow}</span><small>{value}</small></button>)}
+              <button className="direction-center" onClick={() => finishDirectionCapture('?')} aria-label="Direction not sure"><span>●</span><small>Not sure</small></button>
+            </div>
+            <button className="direction-cancel" onClick={() => { setDirectionMode(false); setDirectionAnchor(null); setReportOpen(true); setReportStep(2); }}>Cancel</button>
           </div>}
         </section>
       </section>
@@ -580,7 +560,7 @@ export default function Home() {
 
       {reportOpen && <div className="sheet-layer"><section className="report-sheet"><div className="sheet-handle"/><button className="modal-close" onClick={() => setReportOpen(false)}>×</button><div className="capture-status"><span>{reportLocation ? '✓' : '⌖'}</span><div><strong>{reportLocation ? `Location ready · ±${Math.round(locationAccuracy ?? 0)} m` : 'Refining location…'}</strong><small>{reportTime && `${dateTimeText(reportTime)} · automatic`}</small></div></div>
         {reportStep === 1 && <div className="report-step"><p className="eyebrow">1 of 2 · {selectedPet?.name}</p><h2>Add photo or video?</h2><label className="camera-choice"><input type="file" accept="image/*,video/*" capture="environment" onChange={(event) => { setReportMedia(event.target.files?.[0]?.name || 'capture'); setReportStep(2); }}/><span>▣</span><strong>Take photo or short video</strong></label><button className="large-choice" onClick={() => setReportStep(2)}>No photo — continue</button></div>}
-        {reportStep === 2 && <div className="report-step"><p className="eyebrow">2 of 2 · {selectedPet?.name}</p><h2>How sure are you?</h2><p className="direction-help">Choose once. The map will open for one quick direction swipe.</p><div className="certainty-grid"><button onClick={() => beginDirectionCapture('sure')}>✓<strong>Sure</strong></button><button onClick={() => beginDirectionCapture('maybe')}>≈<strong>Maybe</strong></button><button onClick={() => beginDirectionCapture('unsure')}>?<strong>Unsure</strong></button></div></div>}
+        {reportStep === 2 && <div className="report-step"><p className="eyebrow">2 of 2 · {selectedPet?.name}</p><h2>How sure are you?</h2><p className="direction-help">Choose once. Direction bubbles will open around the sighting point.</p><div className="certainty-grid"><button disabled={!reportLocation} onClick={() => beginDirectionCapture('sure')}>✓<strong>Sure</strong></button><button disabled={!reportLocation} onClick={() => beginDirectionCapture('maybe')}>≈<strong>Maybe</strong></button><button disabled={!reportLocation} onClick={() => beginDirectionCapture('unsure')}>?<strong>Unsure</strong></button></div></div>}
         {reportStep === 4 && <div className="success"><span>✓</span><h2>Sighting saved</h2><p>The automatic location and timestamp were added to {selectedPet?.name}’s trail.</p><button className="primary-action" onClick={() => setReportOpen(false)}>View map</button></div>}
         {reportStep < 4 && <button className="text-button basic-save" disabled={!reportLocation} onClick={() => saveSighting(true)}>Save basic sighting now</button>}
       </section></div>}
