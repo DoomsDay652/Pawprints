@@ -1,0 +1,21 @@
+{
+  "id": "/",
+  "name": "PawPrints",
+  "short_name": "PawPrints",
+  "description": "Community missing-pet sightings and directional search trails.",
+  "start_url": "/?source=installed",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#fffefa",
+  "theme_color": "#1d6b54",
+  "categories": ["social", "utilities", "lifestyle"],
+  "icons": [
+    {
+      "src": "/pawprints-icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
